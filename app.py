@@ -2,30 +2,24 @@ import torch
 from PIL import Image
 from RealESRGAN import RealESRGAN
 import gradio as gr
+import gc
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-if torch.cuda.is_available():
-    torch.cuda.empty_cache()
 
-model2 = RealESRGAN(device, scale=2)
-model2.load_weights('weights/RealESRGAN_x2.pth', download=True)
-if torch.cuda.device_count() > 1:
-    model2 = torch.nn.DataParallel(model2)
+def load_model(scale):
+    model = RealESRGAN(device, scale=scale)
+    model.load_weights(f'weights/RealESRGAN_x{scale}.pth', download=True)
+    if torch.cuda.device_count() > 1:
+        model = torch.nn.DataParallel(model)
+    return model
 
-model4 = RealESRGAN(device, scale=4)
-model4.load_weights('weights/RealESRGAN_x4.pth', download=True)
-if torch.cuda.device_count() > 1:
-    model4 = torch.nn.DataParallel(model4)
-
-model8 = RealESRGAN(device, scale=8)
-model8.load_weights('weights/RealESRGAN_x8.pth', download=True)
-if torch.cuda.device_count() > 1:
-    model8 = torch.nn.DataParallel(model8)
+def deep_clean_gpu():
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
+        gc.collect()
 
 def inference(image, size):
-    global model2
-    global model4
-    global model8
     if image is None:
         raise gr.Error("Image not uploaded")
 
@@ -33,36 +27,22 @@ def inference(image, size):
     if width >= 5000 or height >= 5000:
         raise gr.Error("The image is too large.")
 
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    try:
+        if size == '2x':
+            model = load_model(2)
+        elif size == '4x':
+            model = load_model(4)
+        else:
+            model = load_model(8)
 
-    if size == '2x':
-        try:
-            result = model2.predict(image.convert('RGB'))
-        except torch.cuda.OutOfMemoryError as e:
-            print(e)
-            model2 = RealESRGAN(device, scale=2)
-            model2.load_weights('weights/RealESRGAN_x2.pth', download=False)
-            result = model2.predict(image.convert('RGB'))
-    elif size == '4x':
-        try:
-            result = model4.predict(image.convert('RGB'))
-        except torch.cuda.OutOfMemoryError as e:
-            print(e)
-            model4 = RealESRGAN(device, scale=4)
-            model4.load_weights('weights/RealESRGAN_x4.pth', download=False)
-            result = model4.predict(image.convert('RGB'))
-    else:
-        try:
-            result = model8.predict(image.convert('RGB'))
-        except torch.cuda.OutOfMemoryError as e:
-            print(e)
-            model8 = RealESRGAN(device, scale=8)
-            model8.load_weights('weights/RealESRGAN_x8.pth', download=False)
-            result = model8.predict(image.convert('RGB'))
-
-    print(f"Image size ({device}): {size} ... OK")
-    return result
+        result = model.predict(image.convert('RGB'))
+        print(f"Image size ({device}): {size} ... OK")
+        return result
+    except torch.cuda.OutOfMemoryError as e:
+        print(e)
+        raise gr.Error("Out of GPU memory. Please try with a smaller image or lower resolution model.")
+    finally:
+        deep_clean_gpu()
 
 title = "Real ESRGAN UpScale"
 
@@ -73,7 +53,8 @@ gr.Interface(inference,
     value='2x',
     label='Resolution model')],
     gr.Image(type="pil", label="Output"),
-    title= title,
+    title=title,
+    css="footer{display:none !important}",
     allow_flagging='never',
     cache_examples=False,
-).queue(api_open=True).launch(show_error=True, show_api=True, share=True)
+).launch(share=True)
